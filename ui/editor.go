@@ -556,6 +556,10 @@ func (e *Editor) Draw(screen tcell.Screen, x0, y int, hint string) {
 				s = s.Underline(true)
 			}
 		}
+		if r == '\n' {
+			r = '↲'
+			s = s.Background(tcell.ColorRed).Foreground(tcell.ColorBlack)
+		}
 		screen.SetContent(x, y, r, nil, s)
 		x += runeWidth(r)
 		i++
