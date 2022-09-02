@@ -2,8 +2,10 @@ package ui
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/trustmaster/go-aspell"
 )
 
 type Completion struct {
@@ -12,6 +14,12 @@ type Completion struct {
 	Text      []rune
 	Display   []rune
 	CursorIdx int
+}
+
+type SpellError struct {
+	Start        int
+	End          int
+	Replacements []string
 }
 
 // Editor is the text field where the user writes messages and commands.
@@ -44,6 +52,9 @@ type Editor struct {
 	// width is the width of the screen.
 	width int
 
+	speller           *aspell.Speller
+	speller_errors    []SpellError
+
 	autoComplete func(cursorIdx int, text []rune) []Completion
 	autoCache    []Completion
 	autoCacheIdx int
@@ -59,12 +70,17 @@ type Editor struct {
 // NewEditor returns a new Editor.
 // Call Resize() once before using it.
 func NewEditor(colors ConfigColors, autoComplete func(cursorIdx int, text []rune) []Completion) Editor {
+	speller, _ := aspell.NewSpeller(map[string]string{
+		"lang": "en_US",
+	})
+	defer speller.Delete()
 	return Editor{
 		colors:       colors,
 		text:         [][]rune{{}},
 		history:      [][]rune{},
 		textWidth:    []int{0},
 		autoComplete: autoComplete,
+		speller:      &speller,
 	}
 }
 
@@ -108,6 +124,9 @@ func (e *Editor) PutRune(r rune) {
 		} else {
 			e.backsearchUpdate(e.lineIdx)
 		}
+	}
+	if e.speller != nil {
+		e.SpellCheck()
 	}
 }
 
@@ -168,6 +187,9 @@ func (e *Editor) remRuneAt(idx int) {
 	e.text[e.lineIdx] = e.text[e.lineIdx][:len(e.text[e.lineIdx])-1]
 
 	e.bumpOldestChange()
+	if e.speller != nil {
+		e.SpellCheck()
+	}
 }
 
 func (e *Editor) RemWord() (ok bool) {
@@ -198,6 +220,40 @@ func (e *Editor) RemWord() (ok bool) {
 	e.autoCache = nil
 	e.backsearchEnd()
 	return
+}
+
+func (e *Editor) SpellCheck() {
+	e.speller_errors = nil;
+
+	start := 0
+	line := e.text[e.lineIdx]
+	end := len(line) - 1
+	for pos := start; pos <= end; pos++ {
+		isLetter := unicode.IsLetter(line[pos]) || line[pos] == '\''
+		if isLetter && pos != end {
+			continue
+		}
+		if !isLetter && pos == start {
+			// Ignore anything non letter in front of a word
+			start++;
+			continue
+		}
+		if isLetter && pos == end {
+			// Catch last rune
+			pos++
+		}
+
+		if pos - start > 3 {
+			// Only check words with length > 3
+			word := string(line[start:pos])
+			if !e.speller.Check(word) {
+				spell_err := SpellError{start, pos - 1, e.speller.Suggest(word)}
+				e.speller_errors = append(e.speller_errors, spell_err)
+			}
+		}
+
+		start = pos + 1
+	}
 }
 
 func (e *Editor) Flush() string {
@@ -235,6 +291,7 @@ func (e *Editor) Clear() bool {
 	e.cursorIdx = 0
 	e.offsetIdx = 0
 	e.autoCache = nil
+	e.speller_errors = nil
 	return true
 }
 
@@ -250,6 +307,9 @@ func (e *Editor) Set(text string) {
 	}
 	e.autoCache = nil
 	e.backsearchEnd()
+	if e.speller != nil {
+		e.SpellCheck()
+	}
 }
 
 func (e *Editor) Right() {
@@ -455,6 +515,41 @@ func (e *Editor) bumpOldestChange() {
 	}
 }
 
+func drawAutoComplete(screen tcell.Screen, x0, y0 int, completions[] string) {
+	st := tcell.StyleDefault
+	var text *string
+	for pos := 0; pos < 3; pos++ {
+		text = nil
+		if pos < len(completions) {
+			text = &completions[pos]
+		}
+
+		o_x := x0
+		o_y := (y0 - 2) + pos
+
+		s := st.Background(tcell.ColorBlack)
+		if pos == 0 && text != nil {
+			s = s.Reverse(true)
+		}
+
+		r := rune(' ')
+		screen.SetContent(o_x, o_y, r, nil, s)
+		o_x += runeWidth(r)
+
+		if text != nil {
+			for _, r := range *text {
+				screen.SetContent(o_x, o_y, r, nil, s)
+				o_x += runeWidth(r)
+			}
+		}
+		for pad_x := o_x; (pad_x - x0) < 20; {
+			r := rune(' ')
+			screen.SetContent(pad_x, o_y, r, nil, s)
+			pad_x += runeWidth(r)
+		}
+	}
+}
+
 func (e *Editor) Draw(screen tcell.Screen, x0, y int, hint string) {
 	st := tcell.StyleDefault
 
@@ -478,17 +573,38 @@ func (e *Editor) Draw(screen tcell.Screen, x0, y int, hint string) {
 		autoEnd = e.autoCache[e.autoCacheIdx].EndIdx
 	}
 
+	show_instant := false
+	var instant_offset = 0
+	if show_instant {
+		instant_offset++
+	}
+
 	for i < len(text) && x < x0+e.width {
 		r := text[i]
 		s := st
 		if e.backsearch && i < e.cursorIdx && i >= e.cursorIdx-len(e.backsearchPattern) {
 			s = s.Underline(true)
 		}
+
 		if i >= autoStart && i < autoEnd {
 			s = s.Underline(true)
 		}
 		if i == autoStart {
 			autoX = x
+		}
+		if len(e.speller_errors) > 0 {
+			for _, err := range e.speller_errors {
+				if i >= err.Start && i <= err.End {
+					// Mark errors
+					s = s.Underline(true)
+					// Show overlay
+					if e.cursorIdx >= err.Start && e.cursorIdx <= err.End + instant_offset {
+						o_x0 := x0 + e.textWidth[err.Start] - e.textWidth[e.offsetIdx]
+						o_y0 := y - 1
+						drawAutoComplete(screen, o_x0, o_y0, err.Replacements)
+					}
+				}
+			}
 		}
 		screen.SetContent(x, y, r, nil, s)
 		x += runeWidth(r)

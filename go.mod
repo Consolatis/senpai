@@ -11,6 +11,7 @@ require (
 	golang.org/x/net v0.18.0
 	golang.org/x/time v0.4.0
 	mvdan.cc/xurls/v2 v2.5.0
+	github.com/trustmaster/go-aspell v0.0.0-20200701131845-c2b1f55bec8f
 )
 
 replace github.com/gdamore/tcell/v2 => github.com/delthas/tcell/v2 v2.4.1-0.20230710100648-1489e78d90fb
