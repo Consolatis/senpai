@@ -8,6 +8,7 @@ require (
 	github.com/delthas/go-localeinfo v0.0.0-20221116001557-686a1e185118
 	github.com/gdamore/tcell/v2 v2.6.1-0.20230327043120-47ec3a77754f
 	github.com/mattn/go-runewidth v0.0.15
+	github.com/trustmaster/go-aspell v0.0.0-20200701131845-c2b1f55bec8f // indirect
 	golang.org/x/net v0.18.0
 	golang.org/x/time v0.4.0
 	mvdan.cc/xurls/v2 v2.5.0

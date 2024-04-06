@@ -19,6 +19,8 @@ import (
 
 	"git.sr.ht/~delthas/senpai/irc"
 	"git.sr.ht/~delthas/senpai/ui"
+
+	"github.com/trustmaster/go-aspell"
 )
 
 const eventChanSize = 1024
@@ -102,6 +104,8 @@ type App struct {
 
 	monitor map[string]map[string]struct{} // set of targets we want to monitor per netID, best-effort. netID->target->{}
 
+	speller *aspell.Speller
+
 	networkLock sync.RWMutex        // locks networks
 	networks    map[string]struct{} // set of network IDs we want to connect to; to be locked with networkLock
 
@@ -125,6 +129,11 @@ func NewApp(cfg Config) (app *App, err error) {
 		cfg.Real = cfg.Nick
 	}
 
+	speller, _ := aspell.NewSpeller(map[string]string{
+		"lang": "en_US",
+	})
+	defer speller.Delete()
+
 	app = &App{
 		networks: map[string]struct{}{
 			"": {}, // add the master network by default
@@ -133,6 +142,7 @@ func NewApp(cfg Config) (app *App, err error) {
 		events:        make(chan event, eventChanSize),
 		cfg:           cfg,
 		messageBounds: map[boundKey]bound{},
+		speller:       &speller,
 		monitor:       make(map[string]map[string]struct{}),
 	}
 
@@ -155,7 +165,8 @@ func NewApp(cfg Config) (app *App, err error) {
 		AutoComplete: func(cursorIdx int, text []rune) []ui.Completion {
 			return app.completions(cursorIdx, text)
 		},
-		Mouse: mouse,
+		SpellCheck: func(text []rune) bool { return app.speller.Check(string(text)) },
+		Mouse:      mouse,
 		MergeLine: func(former *ui.Line, addition ui.Line) {
 			app.mergeLine(former, addition)
 		},
@@ -1243,6 +1254,7 @@ func (app *App) completions(cursorIdx int, text []rune) []ui.Completion {
 	if buffer != "" {
 		cs = app.completionsChannelTopic(cs, cursorIdx, text)
 		cs = app.completionsChannelMembers(cs, cursorIdx, text)
+		cs = app.completionsChannelSpelling(cs, cursorIdx, text)
 	}
 	cs = app.completionsMsg(cs, cursorIdx, text)
 	cs = app.completionsCommands(cs, cursorIdx, text)

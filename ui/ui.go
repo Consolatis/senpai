@@ -19,6 +19,7 @@ type Config struct {
 	MemberColEnabled bool
 	TextMaxWidth     int
 	AutoComplete     func(cursorIdx int, text []rune) []Completion
+	SpellCheck       func(word []rune) bool
 	Mouse            bool
 	MergeLine        func(former *Line, addition Line)
 	Colors           ConfigColors
@@ -99,7 +100,7 @@ func New(config Config) (ui *UI, err error) {
 	}()
 
 	ui.bs = NewBufferList(config.Colors, ui.config.MergeLine)
-	ui.e = NewEditor(config.Colors, ui.config.AutoComplete)
+	ui.e = NewEditor(config.Colors, ui.config.AutoComplete, ui.config.SpellCheck)
 	ui.Resize()
 
 	return

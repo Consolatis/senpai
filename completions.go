@@ -66,6 +66,48 @@ func (app *App) completionsChannelTopic(cs []ui.Completion, cursorIdx int, text 
 	return cs
 }
 
+func (app *App) completionsChannelSpelling(cs []ui.Completion, cursorIdx int, text []rune) []ui.Completion {
+	var start int
+	for start = cursorIdx - 1; 0 <= start; start-- {
+		if text[start] == ' ' {
+			break
+		}
+	}
+	start++
+	var end int
+	for end = start; end < len(text); end++ {
+		if text[end] == ' ' {
+			break
+		}
+	}
+
+	word := text[start:end]
+	if len(word) == 0 {
+		return cs
+	}
+
+	for i, suggestion := range app.speller.Suggest(string(word)) {
+		if i > 2 {
+			break
+		}
+		c := make([]rune, len(text)+len(suggestion)-len(word))
+		copy(c[:start], text[:start])
+		if end < len(text) {
+			copy(c[start+len(suggestion):], text[end:])
+		}
+		copy(c[start:], []rune(suggestion))
+		cs = append(cs, ui.Completion{
+			StartIdx:  start,
+			EndIdx:    end,
+			Text:      c,
+			Display:   []rune(suggestion),
+			CursorIdx: start + len(suggestion),
+		})
+	}
+
+	return cs
+}
+
 func (app *App) completionsMsg(cs []ui.Completion, cursorIdx int, text []rune) []ui.Completion {
 	if !hasPrefix(text, []rune("/msg ")) {
 		return cs

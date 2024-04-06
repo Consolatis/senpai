@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -12,6 +13,11 @@ type Completion struct {
 	Text      []rune
 	Display   []rune
 	CursorIdx int
+}
+
+type SpellError struct {
+	StartIdx int
+	EndIdx   int
 }
 
 // Editor is the text field where the user writes messages and commands.
@@ -44,6 +50,9 @@ type Editor struct {
 	// width is the width of the screen.
 	width int
 
+	spellCheck    func(word []rune) bool
+	spellerErrors []SpellError
+
 	autoComplete func(cursorIdx int, text []rune) []Completion
 	autoCache    []Completion
 	autoCacheIdx int
@@ -58,14 +67,16 @@ type Editor struct {
 
 // NewEditor returns a new Editor.
 // Call Resize() once before using it.
-func NewEditor(colors ConfigColors, autoComplete func(cursorIdx int, text []rune) []Completion) Editor {
-	return Editor{
-		colors:       colors,
+func NewEditor(colors ConfigColors, autoComplete func(cursorIdx int, text []rune) []Completion, spellCheck func(word []rune) bool) Editor {
+	e := Editor{
 		text:         [][]rune{{}},
 		history:      [][]rune{},
 		textWidth:    []int{0},
+		spellCheck:   spellCheck,
 		autoComplete: autoComplete,
 	}
+
+	return e
 }
 
 func (e *Editor) Resize(width int) {
@@ -109,6 +120,9 @@ func (e *Editor) PutRune(r rune) {
 			e.backsearchUpdate(e.lineIdx)
 		}
 	}
+	if e.spellCheck != nil {
+		e.SpellCheck()
+	}
 }
 
 func (e *Editor) putRune(r rune) {
@@ -116,6 +130,9 @@ func (e *Editor) putRune(r rune) {
 	copy(e.text[e.lineIdx][e.cursorIdx+1:], e.text[e.lineIdx][e.cursorIdx:])
 	e.text[e.lineIdx][e.cursorIdx] = r
 	e.bumpOldestChange()
+	if e.spellCheck != nil {
+		e.SpellCheck()
+	}
 
 	rw := runeWidth(r)
 	tw := e.textWidth[len(e.textWidth)-1]
@@ -200,6 +217,41 @@ func (e *Editor) RemWord() (ok bool) {
 	return
 }
 
+func (e *Editor) SpellCheck() {
+	// Onyl marks spelling errors but does not store replacements
+
+	e.spellerErrors = nil
+
+	start := 0
+	line := e.text[e.lineIdx]
+	end := len(line) - 1
+	for pos := start; pos <= end; pos++ {
+		isLetter := unicode.IsLetter(line[pos]) || line[pos] == '\''
+		if isLetter && pos != end {
+			continue
+		}
+		if !isLetter && pos == start {
+			// Ignore anything non letter in front of a word
+			start++
+			continue
+		}
+		if isLetter && pos == end {
+			// Catch last rune
+			pos++
+		}
+
+		if pos-start > 3 {
+			// Only check words with length > 3
+			if !e.spellCheck(line[start:pos]) {
+				spellErr := SpellError{start, pos - 1}
+				e.spellerErrors = append(e.spellerErrors, spellErr)
+			}
+		}
+
+		start = pos + 1
+	}
+}
+
 func (e *Editor) Flush() string {
 	content := string(e.text[e.lineIdx])
 	if len(content) > 0 {
@@ -235,6 +287,7 @@ func (e *Editor) Clear() bool {
 	e.cursorIdx = 0
 	e.offsetIdx = 0
 	e.autoCache = nil
+	e.spellerErrors = nil
 	return true
 }
 
@@ -250,6 +303,9 @@ func (e *Editor) Set(text string) {
 	}
 	e.autoCache = nil
 	e.backsearchEnd()
+	if e.spellCheck != nil {
+		e.SpellCheck()
+	}
 }
 
 func (e *Editor) Right() {
@@ -289,6 +345,7 @@ func (e *Editor) RightWord() {
 
 func (e *Editor) Left() {
 	e.left()
+	e.autoCache = nil
 	e.backsearchEnd()
 }
 
@@ -398,11 +455,13 @@ func (e *Editor) AutoComplete() (ok bool) {
 	if len(e.textWidth) <= e.offsetIdx {
 		e.offsetIdx = 0
 	}
+
 	for e.width < e.textWidth[e.cursorIdx]-e.textWidth[e.offsetIdx]+16 {
 		e.offsetIdx++
 	}
 	e.autoCache = nil
 
+	e.SpellCheck()
 	e.backsearchEnd()
 	return true
 }
@@ -489,6 +548,13 @@ func (e *Editor) Draw(screen tcell.Screen, x0, y int, hint string) {
 		}
 		if i == autoStart {
 			autoX = x
+		}
+		for _, err := range e.spellerErrors {
+			if i >= err.StartIdx && i <= err.EndIdx {
+				// Mark errors,
+				// would be more fancy with red curled underlines
+				s = s.Underline(true)
+			}
 		}
 		screen.SetContent(x, y, r, nil, s)
 		x += runeWidth(r)
